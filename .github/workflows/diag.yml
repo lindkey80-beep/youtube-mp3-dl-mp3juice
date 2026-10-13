@@ -1,0 +1,33 @@
+name: Diagnose Convert
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install yt-dlp
+        run: pip install -U yt-dlp
+
+      - name: Test extract (default client)
+        run: |
+          yt-dlp --version
+          echo "--- default ---"
+          yt-dlp -f bestaudio --skip-download "https://www.youtube.com/watch?v=jNQXAC9IVRw" 2>&1 | tail -20 || true
+
+      - name: Test full download+convert
+        run: |
+          mkdir -p /tmp/t && cd /tmp/t
+          echo "--- convert attempt ---"
+          yt-dlp -f bestaudio -x --audio-format mp3 -o "test.%(ext)s" "https://www.youtube.com/watch?v=jNQXAC9IVRw" 2>&1 | tail -30
+          ls -la /tmp/t
