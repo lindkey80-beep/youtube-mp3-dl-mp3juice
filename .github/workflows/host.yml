@@ -1,0 +1,99 @@
+name: Host MP3 Service
+
+on:
+  workflow_dispatch:
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Install backend deps
+        run: |
+          cd backend_flask_server
+          # swap dead 2021 youtube-dl for its maintained fork so downloads work in 2026
+          sed -i 's/youtube-dl==.*/yt-dlp/' requirements.txt
+          sed -i 's/^import youtube_dl/import yt_dlp as youtube_dl/' app.py
+          pip install -r requirements.txt
+          pip install gunicorn==20.0.4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '16'
+
+      - name: Build frontend
+        run: |
+          cd frontend_react_app
+          npm install --legacy-peer-deps
+          npm run build
+
+      - name: Install Caddy
+        run: |
+          curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=amd64" -o /usr/local/bin/caddy
+          chmod +x /usr/local/bin/caddy
+
+      - name: Start backend
+        run: |
+          cd backend_flask_server
+          gunicorn app:app -t 0 -w 1 --threads 4 --preload -b 127.0.0.1:8000 &
+          sleep 4
+
+      - name: Start frontend + /api proxy
+        run: |
+          cat > Caddyfile << 'CADDY'
+          :8080 {
+            handle_path /api/* {
+              reverse_proxy 127.0.0.1:8000
+            }
+            handle /api {
+              reverse_proxy 127.0.0.1:8000
+            }
+            root * frontend_react_app/build
+            file_server
+          }
+          CADDY
+          caddy run --config Caddyfile &
+          sleep 2
+
+      - name: Create public tunnel
+        run: |
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+          chmod +x cloudflared
+          ./cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+          for i in $(seq 1 30); do
+            URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' tunnel.log | head -1)
+            [ -n "$URL" ] && break
+            sleep 2
+          done
+          if [ -z "$URL" ]; then
+            echo "tunnel failed:"; cat tunnel.log; exit 1
+          fi
+          echo "URL=$URL" >> "$GITHUB_ENV"
+          echo "🎵 LIVE: $URL"
+          {
+            echo "### 🎵 MP3 service is LIVE"
+            echo ""
+            echo "**$URL**"
+            echo ""
+            echo "Frontend + API on one URL. Works until this job ends (~6h max)."
+            echo "To stop early: cancel this run. To restart: run this workflow again."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep alive (loop until timeout or cancelled)
+        run: |
+          echo "Hosting at $URL — will stay up until timeout/cancel"
+          while true; do
+            sleep 300
+            echo "$(date -u +%H:%M) still alive: $URL"
+          done
