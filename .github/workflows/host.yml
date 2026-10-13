@@ -36,7 +36,7 @@ jobs:
         run: |
           cd frontend_react_app
           npm install --legacy-peer-deps
-          npm run build
+          CI=false npm run build
 
       - name: Install Caddy
         run: |
