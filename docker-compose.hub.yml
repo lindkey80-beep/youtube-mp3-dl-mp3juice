@@ -1,0 +1,16 @@
+services:
+  frontend:
+    image: ghcr.io/lindkey80-beep/youtube-mp3-frontend:latest
+    container_name: frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    image: ghcr.io/lindkey80-beep/youtube-mp3-backend:latest
+    container_name: backend
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
