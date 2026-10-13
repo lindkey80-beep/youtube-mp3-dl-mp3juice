@@ -1,10 +1,9 @@
-FROM node:latest as build
+FROM node:16 as build
 RUN mkdir -p /usr/src/app
 WORKDIR /usr/src/app
 COPY ["package.json", "package-lock.json*", "./"]
 
-
-RUN npm ci
+RUN npm install --legacy-peer-deps
 COPY . ./
 RUN npm run build
 
