@@ -1,6 +1,6 @@
 from time import sleep
 from flask import Flask, request, send_file, jsonify
-import youtube_dl
+import yt_dlp as youtube_dl
 from random import random
 import shutil
 import os
@@ -75,7 +75,7 @@ def add_thumbnail(file_path,id, artist=None):
         APIC(
             encoding=3, # 3 is for utf-8
             mime='image/jpeg', # image/jpeg or image/png
-            type=3, # 3 is for the cover image
+            type=3, # this is for the cover
             data = idata
         )
     )
@@ -131,8 +131,7 @@ def convert_to_audio():
         Returns success on successfull completion
     """
     id = request.get_json(force=True)['ybid']
-    print("Got request to convert")
-
+    print("Got request to convert", flush=True)
 
     # Handling possible race condition when a first request to convert 
     # the given video is already being processed
@@ -151,7 +150,18 @@ def convert_to_audio():
         processing_queue_cache.delete(id)
         return jsonify(success="File already converted"),200
 
+    try:
+        result = _do_convert(id)
+        processing_queue_cache.delete(id)
+        return jsonify(success="File successfully converted", **result)
+    except Exception as e:
+        processing_queue_cache.delete(id)
+        import traceback
+        traceback.print_exc()
+        return jsonify(error=str(e)), 500
 
+
+def _do_convert(id):
     class MyLogger(object):
         def debug(self, msg):
             pass
@@ -160,22 +170,19 @@ def convert_to_audio():
             pass
 
         def error(self, msg):
-            print(msg)
+            print(msg, flush=True)
 
     def my_hook(d):
         if d['status'] == 'finished':
-            print('Downloaded audio')
+            print('Downloaded audio', flush=True)
 
-    # 'outmpl' has to be named .m4a, otherwise youtube-dl code postprocessors ffmpef
-    #  in def run(self, information), doesnt call ffmpeg4 to convert to mp3
-    # File isssue : When outtmpl is named as something.mp3, the audio is not converted because of
-    # fear of overwriting
+    os.makedirs('./downloadedsongs', exist_ok=True)
 
     # random 5 digit number to prevent multiple downloads overwriting each other
     sample_name = str(int(random()*10000))
     audio_file_path = './downloadedsongs/{}.mp3'.format(sample_name)
 
-    ydl_opts = {
+    base_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
@@ -184,28 +191,47 @@ def convert_to_audio():
         }],
         'logger': MyLogger(),
         'outtmpl': './downloadedsongs/{}.m4a'.format(sample_name),
-        'progress_hooks': [my_hook]
+        'progress_hooks': [my_hook],
+        'socket_timeout': 20,
+        'retries': 3,
+        'nocheckcertificate': True,
     }
 
     link = 'https://www.youtube.com/watch?v={}'.format(id)
-    ydl = youtube_dl.YoutubeDL(ydl_opts)
 
-    ## TODO : Error handling for youtube-dl
-    info_dict = ydl.extract_info(link, download=False)
+    # Datacenter IPs get bot-checked; try several player clients until one works
+    last_err = None
+    info_dict = None
+    for client in (None, 'android', 'web_embedded', 'tv', 'ios'):
+        opts = dict(base_opts)
+        if client:
+            opts['extractor_args'] = {'youtube': {'player_client': [client]}}
+        try:
+            ydl = youtube_dl.YoutubeDL(opts)
+            info_dict = ydl.extract_info(link, download=False)
+            ydl.download([link])
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            print("client %s failed: %s" % (client, e), flush=True)
+            continue
+
+    if last_err is not None:
+        raise last_err
+
     video_title = info_dict.get('title', None)
-    ydl.download([link])
+    print("Converted to mp3", flush=True)
 
-    print("Converted to mp3")
-
-    add_thumbnail(audio_file_path, id, info_dict.get('artist', None))
-
-    print("Thumbnail added to mp3")
+    try:
+        add_thumbnail(audio_file_path, id, info_dict.get('artist', None))
+        print("Thumbnail added to mp3", flush=True)
+    except Exception as e:
+        # thumbnail is cosmetic; don't fail the whole convert for it
+        print("thumbnail failed (ignored): %s" % e, flush=True)
 
     video_cache.set(id,[audio_file_path,video_title])
-    ## Remove from processing queue once done
-    processing_queue_cache.delete(id)
-
-    return jsonify(success="File successfully converted")
+    return {'title': video_title}
 
 if __name__ == '__main__':
     app.run(host=SERVER_HOST, port=SERVER_PORT, threaded=True)
