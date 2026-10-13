@@ -1,8 +1,10 @@
 FROM python:3.8.11-slim-buster
 
-RUN apt-get update; \
-	apt-get install -y --no-install-recommends \
-		ffmpeg
+RUN printf 'deb http://archive.debian.org/debian buster main\ndeb http://archive.debian.org/debian-security buster/updates main\n' > /etc/apt/sources.list \
+	&& apt-get update -o Acquire::Check-Valid-Until=false \
+	&& apt-get install -y --no-install-recommends \
+		ffmpeg \
+	&& rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /usr/src/app
 WORKDIR /usr/src/app
